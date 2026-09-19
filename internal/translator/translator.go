@@ -44,6 +44,7 @@ const (
 // SpanT represents the tracing span type passed to ResponseBody. Use any if the implementation does not have tracing span yet.
 //
 // This is created per request and is not thread-safe.
+// Kross: Translator 的核心作用是负责不同协议之间的转换，例如：OpenAI → Anthropic，OpenAI → AWS Bedrock
 type Translator[ReqT any, SpanT any] interface {
 	// RequestBody translates the request body.
 	//     - `raw` is the raw request body.

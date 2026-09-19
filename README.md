@@ -8,58 +8,58 @@
 </p>
 
 <p align="center">
-  <b>The open source control plane for AI and agent traffic, powered by Envoy.</b><br>
-  An Agentic AI Foundation project. Formerly <i>Envoy AI Gateway</i>.
+  <b>由 Envoy 驱动的 AI 与智能体流量开源控制平面。</b><br>
+  Agentic AI Foundation 旗下项目，前身为 <i>Envoy AI Gateway</i>。
 </p>
 
 <p align="center">
-  <a href="https://theagentrouter.ai/docs">Documentation</a> ·
-  <a href="https://theagentrouter.ai/docs/getting-started/">Quickstart</a> ·
-  <a href="https://theagentrouter.ai/blog">Blog</a> ·
-  <a href="https://theagentrouter.ai/release-notes/">Release Notes</a> ·
-  <a href="https://theagentrouter.ai/talks">Talks</a>
+  <a href="https://theagentrouter.ai/docs">文档</a> ·
+  <a href="https://theagentrouter.ai/docs/getting-started/">快速开始</a> ·
+  <a href="https://theagentrouter.ai/blog">博客</a> ·
+  <a href="https://theagentrouter.ai/release-notes/">发行说明</a> ·
+  <a href="https://theagentrouter.ai/talks">演讲</a>
 </p>
 
 # Agent Router
 
-Agent Router gives application teams one consistent, OpenAI-compatible API for every model and tool, from hosted providers to self-hosted inference and MCP servers. Platform teams keep credentials, routing, quotas, failover, and usage attribution in one place, enforced by [Envoy](https://envoyproxy.io) and [Envoy Gateway](https://gateway.envoyproxy.io).
+Agent Router 为应用团队提供统一且兼容 OpenAI 的 API，可连接从托管服务商到自托管推理服务及 MCP 服务器的各种模型和工具。平台团队可以集中管理凭据、路由、配额、故障转移和用量归因，并由 [Envoy](https://envoyproxy.io) 与 [Envoy Gateway](https://gateway.envoyproxy.io) 负责实施。
 
-**Agent Router controls. Envoy carries.**
+**Agent Router 负责控制，Envoy 负责承载。**
 
-## Formerly Envoy AI Gateway
+## 前身：Envoy AI Gateway
 
-Envoy AI Gateway is now **Agent Router**, an Agentic AI Foundation project. Same code, same maintainers, same release cadence and Apache 2.0 license. Nothing you deploy is renamed:
+Envoy AI Gateway 现已更名为 **Agent Router**，并成为 Agentic AI Foundation 旗下项目。代码、维护者、发布节奏和 Apache 2.0 许可证均保持不变。你部署的任何资源都不需要重命名：
 
-- **CRDs and API group are unchanged**: `AIGatewayRoute`, `AIServiceBackend`, `BackendSecurityPolicy`, and the `aigateway.envoyproxy.io` API group stay as they are.
-- **The CLI is still `aigw`**, and the `envoy-ai-gateway-system` namespace is unchanged.
-- **Container images, Helm charts, and the Go module path are unchanged** (`docker.io/envoyproxy/ai-gateway-*`, `github.com/envoyproxy/ai-gateway`).
-- **The repository moved** to [`theagentrouter/agent-router`](https://github.com/theagentrouter/agent-router); old `envoyproxy/ai-gateway` links redirect.
-- **The website moved** to [theagentrouter.ai](https://theagentrouter.ai); every `aigateway.envoyproxy.io` link redirects to the same page.
+- **CRD 和 API 组保持不变**：`AIGatewayRoute`、`AIServiceBackend`、`BackendSecurityPolicy` 以及 `aigateway.envoyproxy.io` API 组均维持原样。
+- **CLI 仍为 `aigw`**，`envoy-ai-gateway-system` 命名空间也没有变化。
+- **容器镜像、Helm Chart 和 Go 模块路径保持不变**（`docker.io/envoyproxy/ai-gateway-*`、`github.com/envoyproxy/ai-gateway`）。
+- **代码仓库已迁移**至 [`theagentrouter/agent-router`](https://github.com/theagentrouter/agent-router)；旧的 `envoyproxy/ai-gateway` 链接会自动跳转。
+- **网站已迁移**至 [theagentrouter.ai](https://theagentrouter.ai)；所有 `aigateway.envoyproxy.io` 链接都会跳转到对应的新页面。
 
-Your manifests from yesterday apply tomorrow.
+现有的清单文件可以继续使用。
 
-## Quick start
+## 快速开始
 
-Run Agent Router as a standalone, OpenAI-compatible router on your laptop with one command:
+只需一条命令，即可在本机以独立模式运行兼容 OpenAI 的 Agent Router：
 
 ```shell
 OPENAI_API_KEY=sk-your-key aigw run
 ```
 
-Then point any OpenAI-compatible client at `http://localhost:1975/v1`. See the [CLI guide](https://theagentrouter.ai/docs/cli/) for installation and provider auto-configuration, or the [Getting Started guide](https://theagentrouter.ai/docs/getting-started/) to deploy on Kubernetes with Envoy Gateway.
+然后将任意兼容 OpenAI 的客户端指向 `http://localhost:1975/v1`。有关安装和服务商自动配置，请参阅 [CLI 指南](https://theagentrouter.ai/docs/cli/)；如需配合 Envoy Gateway 部署到 Kubernetes，请参阅[入门指南](https://theagentrouter.ai/docs/getting-started/)。
 
-## Usage
+## 使用方式
 
-When using Agent Router, we refer to a two-tier gateway pattern. **The Tier One Gateway** functions as a centralized entry point, and the **Tier Two Gateway** handles ingress traffic to a self-hosted model serving cluster.
+Agent Router 采用两级网关模式：**一级网关（Tier One Gateway）**充当集中式入口，**二级网关（Tier Two Gateway）**负责处理进入自托管模型服务集群的流量。
 
-- The **Tier One Gateway** handles authentication, top-level routing, and global rate limiting
-- The **Tier Two Gateway** provides fine-grained control over self-hosted model access, with endpoint picker support for LLM inference optimization.
+- **一级网关**负责身份验证、顶层路由和全局限流。
+- **二级网关**对自托管模型访问提供精细控制，并通过端点选择器优化 LLM 推理。
 
 ![](site/blog/images/aigw-ref.drawio.png)
 
-## Supported AI Providers
+## 支持的 AI 服务商
 
-Agent Router supports a wide range of AI providers, making it easy to integrate with your preferred LLM services:
+Agent Router 支持多种 AI 服务商，便于集成你所使用的 LLM 服务：
 
 <div align="center">
   <table>
@@ -138,33 +138,33 @@ Agent Router supports a wide range of AI providers, making it easy to integrate 
   </table>
 </div>
 
-## Documentation
+## 文档
 
-- [Documentation](https://theagentrouter.ai/docs) for Agent Router.
-- [Quickstart](https://theagentrouter.ai/docs/getting-started/) to use Agent Router in a few simple steps.
-- [CLI guide](https://theagentrouter.ai/docs/cli/) to run Agent Router standalone with `aigw run`.
-- [Concepts](https://theagentrouter.ai/docs/concepts/) to understand the architecture and resources of Agent Router.
-- [Blog](https://theagentrouter.ai/blog) for announcements, features, and reference architectures.
-- [Talks and Presentations](https://theagentrouter.ai/talks) about Agent Router.
+- [项目文档](https://theagentrouter.ai/docs)：Agent Router 的完整文档。
+- [快速开始](https://theagentrouter.ai/docs/getting-started/)：通过几个简单步骤开始使用 Agent Router。
+- [CLI 指南](https://theagentrouter.ai/docs/cli/)：使用 `aigw run` 独立运行 Agent Router。
+- [核心概念](https://theagentrouter.ai/docs/concepts/)：了解 Agent Router 的架构与资源。
+- [博客](https://theagentrouter.ai/blog)：查看公告、功能介绍和参考架构。
+- [演讲与分享](https://theagentrouter.ai/talks)：查看 Agent Router 相关演讲。
 
-## Contact
+## 联系我们
 
-- Chat: join the [Agent Router Discord][Discord] to ask questions and collaborate with the community.
-- Weekly meeting: the maintainers and community meet every Monday. Register, add agenda points, and get involved via the [public meeting document][meeting].
+- 在线交流：加入 [Agent Router Discord][Discord]，向社区提问并参与协作。
+- 每周例会：维护者和社区成员每周一举行会议。你可以通过[公开会议文档][meeting]报名、添加议题并参与讨论。
 
-## Get Involved
+## 参与贡献
 
-We follow the LF Projects [Code of Conduct][Code of conduct], as an Agentic AI Foundation project.
+作为 Agentic AI Foundation 旗下项目，我们遵循 LF Projects 的[行为准则][Code of conduct]。
 
-To contribute to the project via pull requests, please read the [CONTRIBUTING.md](CONTRIBUTING.md) file which includes information on how to build and test the project.
+如需通过 Pull Request 为项目贡献代码，请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)，其中包含项目构建与测试说明。
 
-## Background
+## 背景
 
-The proposal of using Envoy Gateway as a [Cloud Native LLM Gateway][Cloud Native LLM Gateway] inspired the initiation of this project.
+使用 Envoy Gateway 构建[云原生 LLM 网关][Cloud Native LLM Gateway]的提案促成了本项目的诞生。
 
 ---
 
-Agent Router is an Agentic AI Foundation project, powered by Envoy. Copyright © Agent Router a Series of LF Projects, LLC. For web site terms of use, [trademark policy](https://theagentrouter.ai/trademark-policy) and other project policies please see <https://lfprojects.org>.
+Agent Router 是由 Envoy 驱动的 Agentic AI Foundation 项目。版权所有 © Agent Router a Series of LF Projects, LLC。有关网站使用条款、[商标政策](https://theagentrouter.ai/trademark-policy)及其他项目政策，请访问 <https://lfprojects.org>。
 
 [meeting]: https://docs.google.com/document/d/10e1sfsF-3G3Du5nBHGmLjXw5GVMqqCvFDqp_O65B0_w/edit?tab=t.0
 [Discord]: https://discord.gg/xuxtPq43gZ

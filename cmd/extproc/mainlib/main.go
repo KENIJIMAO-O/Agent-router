@@ -205,18 +205,23 @@ func parseAndValidateFlags(args []string) (extProcFlags, error) {
 //
 // This returns an error if the external processor fails to start, or nil otherwise. When the `ctx` is canceled,
 // the function will return nil.
+
+// kross: 创建并启动 Agent Router External Processor 进程中的所有长期运行组件
 func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
+	// kross: 错误归一化
 	defer func() {
 		// Don't err the caller about normal shutdown scenarios.
 		if errors.Is(err, context.Canceled) || errors.Is(err, grpc.ErrServerStopped) {
 			err = nil
 		}
 	}()
+	// kross: 解析并验证启动参数
 	flags, err := parseAndValidateFlags(args)
 	if err != nil {
 		return fmt.Errorf("failed to parse and validate extProcFlags: %w", err)
 	}
 
+	// kross: logger
 	l := slog.New(newLogHandler(stderr, flags.logLevel, flags.logFormat))
 
 	l.Info("starting external processor",
@@ -294,6 +299,8 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to create metrics: %w", err)
 	}
+
+	// kross: 创建 LLM 请求指标工厂
 	chatCompletionMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationChat)
 	messagesMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationMessages)
 	completionMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationCompletion)
@@ -307,14 +314,17 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 	tokenizeMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationTokenize)
 	responsesInputTokensMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationResponsesInputTokens)
 	countTokensMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationCountTokens)
+	// kross: 创建 MCP 专用指标记录器
 	mcpMetrics := metrics.NewMCP(meter, metricsRequestHeaderAttributes)
 
 	extproc.LogRequestHeaderAttributes = logRequestHeaderAttributes
 
+	// kross: 创建 ext_proc 请求处理中心
 	server, err := extproc.NewServer(l, flags.enableRedaction)
 	if err != nil {
 		return fmt.Errorf("failed to create external processor server: %w", err)
 	}
+	// kross: 注册 Path 对应的请求处理器
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/v1/chat/completions"), extproc.NewFactory(
 		chatCompletionMetricsFactory, tracing.ChatCompletionTracer(), endpointspec.ChatCompletionsEndpointSpec{}))
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/v1/completions"), extproc.NewFactory(
@@ -387,6 +397,7 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 		}()
 	}
 
+	// kross: 真正创建和启动 gRPC 网络服务
 	s := grpc.NewServer(grpc.MaxRecvMsgSize(flags.maxRecvMsgSize))
 	extprocv3.RegisterExternalProcessorServer(s, server)
 	grpc_health_v1.RegisterHealthServer(s, server)
@@ -436,6 +447,7 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 	return s.Serve(extProcLis)
 }
 
+// kross: 真正占用地址并建立监听器
 func listen(ctx context.Context, name, network, address string) (net.Listener, error) {
 	var lc net.ListenConfig
 	lis, err := lc.Listen(ctx, network, address)
@@ -446,6 +458,7 @@ func listen(ctx context.Context, name, network, address string) (net.Listener, e
 }
 
 // listenAddress returns the network and address for the given address flag.
+// kross: 解析配置，unix:///tmp/ext_proc.sock → ("unix", "/tmp/ext_proc.sock")
 func listenAddress(addrFlag string) (string, string) {
 	if after, ok := strings.CutPrefix(addrFlag, "unix://"); ok {
 		p := after

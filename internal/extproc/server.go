@@ -55,12 +55,12 @@ func loggerFromContext(ctx context.Context) *slog.Logger {
 type Server struct {
 	logger                        *slog.Logger
 	debugLogEnabled               bool
-	enableRedaction               bool
+	enableRedaction               bool // 控制 Debug 日志中是否对敏感请求内容脱敏
 	config                        *filterapi.RuntimeConfig
-	processorFactories            map[string]ProcessorFactory
-	routerProcessorsPerReqID      map[string]Processor
+	processorFactories            map[string]ProcessorFactory // API Path → 对应的 Processor 工厂, 例如 /v1/chat/completions → ChatCompletion Processor Factory
+	routerProcessorsPerReqID      map[string]Processor        // 保存当前正在处理的请求
 	routerProcessorsPerReqIDMutex sync.RWMutex
-	uuidFn                        func() string
+	uuidFn                        func() string //给每个请求生成内部 UUID，防止不同请求之间发生状态冲突
 }
 
 // NewServer creates a new external processor server.
@@ -173,6 +173,7 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 		// Note that `req.GetRequestHeaders()` will only return non-nil if the request is
 		// of type `ProcessingRequest_RequestHeaders`, so this will be executed only once per
 		// request, and the processor will be instantiated only once.
+		// kross: 获取用户请求中的请求头，根据请求头中的Path，创建 routerProcessor
 		if headers := req.GetRequestHeaders().GetHeaders(); headers != nil {
 			headersMap := headersToMap(headers)
 			originalReqID = headersMap["x-request-id"]
@@ -233,11 +234,18 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 		}
 
 		// At this point, p is guaranteed to be a valid processor either from the concrete processor or the passThroughProcessor.
+		// kross: 获取用户的请求体
 		resp, err := s.processMsg(ctx, p, req, internalReqID, isUpstreamFilter)
 		if err != nil {
 			s.logger.Error("error processing request message", slog.String("error", err.Error()))
 			return status.Errorf(codes.Unknown, "error processing request message: %v", err)
 		}
+		// Kross：把 ProcessingResponse 通过 gRPC 发送回 Envoy
+		// Envoy收到后：
+		// 1. 把 HeaderMutation 应用到原始 HTTP 请求。
+		// 2. 把 BodyMutation 应用到原始 Body。
+		// 3. 根据 Status 决定继续还是直接返回响应。
+		// 4. 使用修改后的 HTTP 请求访问模型服务。
 		if err := stream.Send(resp); err != nil {
 			s.logger.Error("cannot send response", slog.String("error", err.Error()))
 			return status.Errorf(codes.Unknown, "cannot send response: %v", err)
@@ -245,6 +253,12 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 	}
 }
 
+// kross: 这个函数是超级非常重要的函数，他处理的其实就是 upstreamProcessor 和 Envoy 之间的通信
+// 当用户的请求来的时候，会请求到 Envoy ，然后 -> Server.Process() -> routerProcessor.ProcessResponseHeaders() -> upstreamProcessor.ProcessResponseHeaders()
+// upstreamProcessor 处理完之后会返回 “原始 HTTP 请求” + “ProcessingResponse 中的修改指令“ 给 Envoy
+// 由 Envoy 将最终的请求发送给模型，模型服务的 HTTP 响应也是先返回给 Envoy，然后 Envoy 把响应拆成 ext_proc 消息，发送给 Agent Router
+// Envoy -> Server.Process() -> stream.Recv() -> processMsg(), processMsg() 根据消息类型调用 p.ProcessResponseHeaders(...), p.ProcessResponseBody(...)
+// 处理完成后，又返回一个 ProcessingResponse 给 Envoy, Envoy 返回给用户
 func (s *Server) processMsg(ctx context.Context, p Processor, req *extprocv3.ProcessingRequest, internalReqID string, isUpstreamFilter bool) (*extprocv3.ProcessingResponse, error) {
 	l := loggerFromContext(ctx)
 	switch value := req.Request.(type) {

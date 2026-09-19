@@ -70,6 +70,14 @@ func NewFactory[ReqT any, RespT any, RespChunkT any, EndpointSpecT endpointspec.
 	}
 }
 
+// kross: routerProcessor 和 upstreamProcessor 是同一次用户请求在两个不同阶段使用的处理器
+// routerProcessor = 路由前处理：先搞清楚用户想用哪个模型。
+// 路由前，此时系统只知道用户请求路径，用户请求 Header，用户请求 Body，用户填写的 model，还是不知道最终选择哪个AIServiceBackend，哪个模型服务商，哪种 API Schema，使用哪种认证。
+// 它的核心任务是，解析用户请求，提取足够的信息，让系统能够选择 Route 和 Backend。
+//
+// upstreamProcessor = 路由后处理：Backend 已确定，真正完成协议转换和鉴权
+// Backend 确定之后，这时它已经知道：1.选中了哪个 Backend 2.Backend 使用什么 API Schema 3.是否需要模型名覆盖 4.使用哪种认证方式 5.需要哪些 Header/Body Mutation
+// 所以它的核心任务是: 把用户请求转换成目标模型服务商真正需要的请求，并把服务商响应转换回用户需要的格式。
 type (
 	// routerProcessor implements [Processor] for the router filter for the standard LLM endpoints.
 	routerProcessor[ReqT, RespT, RespChunkT any, EndpointSpecT endpointspec.Spec[ReqT, RespT, RespChunkT]] struct {
@@ -123,11 +131,13 @@ type (
 		decompressedOffset int    // tracks decompressed bytes already returned
 		translator         translator.Translator[ReqT, tracingapi.Span[RespT, RespChunkT]]
 		modelNameOverride  internalapi.ModelNameOverride
-		headerMutator      *headermutator.HeaderMutator
-		bodyMutator        *bodymutator.BodyMutator
-		backendName        string
-		routeName          string
-		handler            filterapi.BackendAuthHandler
+		// kross: 负责 Backend 或 Route 级别的 Header、Body 修改
+		headerMutator *headermutator.HeaderMutator
+		bodyMutator   *bodymutator.BodyMutator
+		backendName   string
+		routeName     string
+		handler       filterapi.BackendAuthHandler
+		// kross: Metrics 和成本,负责 Token Usage, 请求成功率, 请求延迟, 首 Token 延迟, Backend 和模型标签
 		// cost is the cost of the request that is accumulated during the processing of the response.
 		costs metrics.TokenUsage
 		// metrics tracking.
@@ -239,6 +249,10 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 	)
 	costConfigured := len(r.config.RequestCosts) > 0 || len(r.config.GlobalRequestCosts) > 0
 	contentType := r.requestHeaders["content-type"]
+	// kross: 解析请求 Body, 对于 /v1/chat/completions，实际调用：ChatCompletionsEndpointSpec.ParseBody()
+	// originalModel = "gpt-5.6-sol"
+	// stream        = false
+	// body          = *openai.ChatCompletionRequest
 	if strings.HasPrefix(strings.ToLower(contentType), "multipart/form-data") {
 		originalModel, body, stream, mutatedOriginalBody, err = r.eh.ParseMultipartBody(rawBody.Body, contentType, costConfigured)
 	} else {
@@ -272,6 +286,7 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 		}
 	}
 
+	// kross: 保存原始请求
 	if mutatedOriginalBody != nil {
 		r.originalRequestBodyRaw = mutatedOriginalBody
 		r.forceBodyMutation = true
@@ -279,6 +294,7 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 		r.originalRequestBodyRaw = rawBody.Body
 	}
 
+	// kross: 添加内部模型 Header
 	r.requestHeaders[internalapi.ModelNameHeaderKeyDefault] = originalModel
 
 	var additionalHeaders []*corev3.HeaderValueOption
@@ -306,6 +322,13 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 	r.originalModel = originalModel
 	r.originalRequestBody = body
 	r.stream = stream
+	// 临时实验日志：查看解析后的模型请求结构
+	logger.Warn(
+		"experiment request parsed",
+		slog.String("event", "experiment.request.parsed"),
+		slog.String("model", string(r.originalModel)),
+		slog.Any("payload", r.originalRequestBody),
+	)
 
 	// Tracing may need to inject headers, so create a header mutation here.
 	headerMutation := &extprocv3.HeaderMutation{
@@ -554,6 +577,7 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 	// For streaming responses with content-encoding, use stateful decompression
 	// that accumulates compressed bytes across chunks.
 	var decodingResult contentDecodingResult
+	// kross: u.parent.stream当前请求是不是流式请求
 	if u.parent.stream && u.responseEncoding != "" {
 		decodingResult, err = u.decodeStreamingContent(body.Body, body.EndOfStream)
 	} else {
@@ -595,6 +619,7 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 		}, nil
 	}
 
+	// kross: 对于同一个 Endpoint 输出，无论是由怎样的translator输出，都会在当前时刻统一转化到 newBody
 	newHeaders, newBody, tokenUsage, responseModel, err := u.translator.ResponseBody(u.responseHeaders, decodingResult.reader, body.EndOfStream, u.parent.span)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transform response: %w", err)
@@ -681,26 +706,61 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) decodeStream
 }
 
 // SetBackend implements [Processor.SetBackend].
+// kross: 当路由已经选定具体 Backend 后，用该 Backend 的配置初始化整个 upstreamProcessor，让它具备协议转换、请求修改、鉴权、指标记录和响应处理能力。
+// 调用前 upstreamProcessor
+//   只知道请求 Header
+//   不知道后端是谁
+//   不知道使用什么协议
+//   不知道怎样鉴权
+
+//           ↓ SetBackend()
+
+// 调用后 upstreamProcessor
+//
+//	知道具体 Backend
+//	知道目标 API Schema
+//	拥有 Translator
+//	拥有鉴权 Handler
+//	拥有 Header/Body Mutator
+//	与 routerProcessor 建立关联
+
+// 1. 建立请求关联
+//    parent、upstreamFilter、upstreamFilterCount
+
+// 2. 设置 Backend 身份
+//    backendName、routeName、modelNameOverride
+
+// 3. 准备上游请求处理组件
+//    translator、handler、headerMutator、bodyMutator
+
+//  4. 准备可观测性
+//     metrics.SetBackend、Trace Backend、Redaction
 func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) SetBackend(ctx context.Context, backend *filterapi.RuntimeBackend, routeName string, routeProcessor Processor) (err error) {
+	// kross: 失败时记录指标
 	defer func() {
 		if err != nil {
 			u.metrics.RecordRequestCompletion(ctx, false, u.requestHeaders)
 		}
 	}()
+	// kross: 把接口还原成 routerProcessor
 	rp, ok := routeProcessor.(*routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT])
 	if !ok {
 		panic(fmt.Sprintf("BUG: expected routeProcessor to be of type *routerProcessor[%T], got %T", rp, routeProcessor))
 	}
+	// kross: 增加 Upstream Filter 次数
 	rp.upstreamFilterCount++
+	// kross: 告诉 Metrics 当前选中了哪个 Backend
 	u.metrics.SetBackend(backend.Backend)
 	// Some semantic conventions record the provider, which is only known now
 	// that routing has resolved a backend.
+	// kross: 把 Backend 写入 Trace
 	if bs, ok := rp.span.(tracingapi.BackendSpan); ok {
 		bs.RecordBackend(tracingapi.Backend{
 			Schema: string(backend.Backend.Schema.Name),
 			Name:   backend.Backend.Name,
 		})
 	}
+	// kross: 设置模型名称覆盖
 	u.modelNameOverride = backend.Backend.ModelNameOverride
 	u.backendName = backend.Backend.Name
 	u.routeName = routeName
@@ -711,8 +771,10 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) SetBackend(c
 	if u.modelNameOverride != "" {
 		u.requestHeaders[internalapi.ModelNameHeaderKeyDefault] = u.modelNameOverride
 	}
+	// kross: 关联父 routerProcessor
 	u.parent = rp // Set parent before GetTranslator so it can access rp.eh
 
+	// kross: 根据 Backend Schema 创建 Translator
 	u.translator, err = u.parent.eh.GetTranslator(backend.Backend.Schema, u.modelNameOverride)
 	if err != nil {
 		return fmt.Errorf("failed to create translator for backend %s: %w", backend.Backend.Name, err)
@@ -720,12 +782,20 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) SetBackend(c
 	if setter, ok := u.translator.(translator.ContentTypeSetter); ok {
 		setter.SetContentType(rp.requestHeaders["content-type"])
 	}
+	// kross: 仅在 Translator 成功后回填 Router
+	// kross: 最终形成：
+	//  routerProcessor
+	//     ──upstreamFilter──> upstreamProcessor
+
+	//  upstreamProcessor
+	//     ──parent──────────> routerProcessor
 	rp.upstreamFilter = u // Only assign after translator is confirmed valid
 
 	if headerSetter, ok := u.translator.(translator.RequestHeadersSetter); ok {
 		headerSetter.SetRequestHeaders(u.requestHeaders)
 	}
 
+	// kross: 配置 Header Value Filter, 过滤多值 Header 中的某些值。
 	if filters := backend.Backend.HeaderValueFilters; len(filters) > 0 {
 		if filterSetter, ok := u.translator.(translator.HeaderValueFilterSetter); ok {
 			for _, f := range filters {
@@ -734,6 +804,12 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) SetBackend(c
 		}
 	}
 
+	// kross: 设置响应脱敏配置, 某些 Translator 会在 Debug 模式记录解析后的响应内容，
+	// 而响应可能包含：
+	// 	用户生成内容。
+	// 	Tool Call 参数。
+	// 	模型输出中的敏感信息。
+	// 	Provider 错误细节。
 	switch redactor := u.translator.(type) {
 	case translator.ResponseRedactor:
 		redactor.SetRedactionConfig(u.parent.debugLogEnabled, u.parent.enableRedaction, u.logger)

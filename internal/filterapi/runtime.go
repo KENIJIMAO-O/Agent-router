@@ -3,6 +3,7 @@
 // The full text of the Apache license is available in the LICENSE file at
 // the root of the repo.
 
+// kross: 负责上游鉴权，例如API Key, AWS SigV4, GCP Token, Azure Key
 package filterapi
 
 import (
@@ -50,8 +51,10 @@ type RuntimeConfig struct {
 // RuntimeBackend is a filter backend with its auth handler that is derived from the filterapi.Backend configuration.
 type RuntimeBackend struct {
 	// Backend is the filter backend configuration.
+	// kross: 静态业务配置
 	Backend *Backend
 	// Handler is the backend auth handler.
+	// kross: 已初始化的上游鉴权处理器, API Key, AWS SigV4, GCP Token, Azure/Anthropic Auth
 	Handler BackendAuthHandler
 }
 

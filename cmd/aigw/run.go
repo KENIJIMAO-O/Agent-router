@@ -397,6 +397,7 @@ func (runCtx *runCmdContext) mustStartExtProc(
 		"--adminPort", fmt.Sprintf("%d", runCtx.adminPort),
 		"--mcpAddr", ":" + strconv.Itoa(internalapi.MCPProxyPort),
 		"--mcpSessionEncryptionIterations", strconv.Itoa(runCtx.mcpSessionEncryptionIterations),
+		"--logFormat", "json",
 	}
 	if runCtx.isDebug {
 		args = append(args, "--logLevel", "debug")
